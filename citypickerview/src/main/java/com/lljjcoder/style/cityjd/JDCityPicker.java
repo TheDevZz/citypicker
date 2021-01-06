@@ -25,9 +25,7 @@ import com.lljjcoder.bean.CityBean;
 import com.lljjcoder.bean.DistrictBean;
 import com.lljjcoder.bean.ProvinceBean;
 import com.lljjcoder.citywheel.CityParseHelper;
-import com.lljjcoder.style.citylist.Toast.ToastUtils;
 import com.lljjcoder.style.citypickerview.R;
-import com.lljjcoder.style.citypickerview.widget.CanShow;
 import com.lljjcoder.utils.utils;
 
 import java.util.List;
@@ -76,6 +74,7 @@ public class JDCityPicker {
     private OnCityItemClickListener mBaseListener;
 
     private JDCityConfig cityConfig = null;
+    private IDataSource dataSource;
 
     public void setOnCityItemClickListener(OnCityItemClickListener listener) {
         mBaseListener = listener;
@@ -94,14 +93,14 @@ public class JDCityPicker {
 
         tabIndex = INDEX_TAB_PROVINCE;
         //解析初始数据
-        if (parseHelper == null) {
-            parseHelper = new CityParseHelper();
-        }
-
-        if (parseHelper.getProvinceBeanArrayList().isEmpty()) {
-            ToastUtils.showLongToast(context, "请调用init方法进行初始化相关操作");
-            return;
-        }
+//        if (parseHelper == null) {
+//            parseHelper = new CityParseHelper();
+//        }
+//
+//        if (parseHelper.getProvinceBeanArrayList().isEmpty()) {
+//            ToastUtils.showLongToast(context, "请调用init方法进行初始化相关操作");
+//            return;
+//        }
 
 
         LayoutInflater layoutInflater = LayoutInflater.from(context);
@@ -193,30 +192,38 @@ public class JDCityPicker {
         utils.setBackgroundAlpha(context, 0.5f);
         updateIndicator();
         updateTabsStyle(INDEX_INVALID);
-        setProvinceListData();
+        setupProvinceListData();
 
     }
 
     private void selectedList(int position) {
         switch (tabIndex) {
             case INDEX_TAB_PROVINCE:
-                ProvinceBean provinceBean = mProvinceAdapter.getItem(position);
+                final ProvinceBean provinceBean = mProvinceAdapter.getItem(position);
                 if (provinceBean != null) {
                     mProTv.setText("" + provinceBean.getName());
                     mCityTv.setText("请选择");
                     mProvinceAdapter.updateSelectedPosition(position);
                     mProvinceAdapter.notifyDataSetChanged();
-                    mCityAdapter = new CityAdapter(context, provinceBean.getCityList());
                     //选中省份数据后更新市数据
-                    mHandler.sendMessage(Message.obtain(mHandler, INDEX_TAB_CITY, provinceBean.getCityList()));
-
+                    if (dataSource == null) {
+                        mHandler.sendMessage(Message.obtain(mHandler, INDEX_TAB_CITY, provinceBean.getCityList()));
+                    } else {
+                        dataSource.execute(new Runnable() {
+                            @Override
+                            public void run() {
+                                List<CityBean> cityList = dataSource.getCityList(provinceBean);
+                                mHandler.sendMessage(Message.obtain(mHandler, INDEX_TAB_CITY, cityList));
+                            }
+                        });
+                    }
                 }
 
                 break;
 
 
             case INDEX_TAB_CITY:
-                CityBean cityBean = mCityAdapter.getItem(position);
+                final CityBean cityBean = mCityAdapter.getItem(position);
                 if (cityBean != null) {
                     mCityTv.setText("" + cityBean.getName());
                     mAreaTv.setText("请选择");
@@ -225,9 +232,31 @@ public class JDCityPicker {
                     if (this.cityConfig != null && this.cityConfig.getShowType() == JDCityConfig.ShowType.PRO_CITY) {
                         callback(new DistrictBean());
                     } else {
-                        mAreaAdapter = new AreaAdapter(context, cityBean.getCityList());
                         //选中省份数据后更新市数据
-                        mHandler.sendMessage(Message.obtain(mHandler, INDEX_TAB_AREA, cityBean.getCityList()));
+                        if (dataSource == null) {
+                            if (cityBean.getCityList().isEmpty()) {
+                                callback(new DistrictBean());
+                                return;
+                            }
+                            mHandler.sendMessage(Message.obtain(mHandler, INDEX_TAB_AREA, cityBean.getCityList()));
+                        } else {
+                            dataSource.execute(new Runnable() {
+                                @Override
+                                public void run() {
+                                    List<DistrictBean> districtList = dataSource.getDistrictList(cityBean);
+                                    if (districtList.isEmpty()) {
+                                        mHandler.post(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                callback(new DistrictBean());
+                                            }
+                                        });
+                                        return;
+                                    }
+                                    mHandler.sendMessage(Message.obtain(mHandler, INDEX_TAB_AREA, districtList));
+                                }
+                            });
+                        }
                     }
                 }
                 break;
@@ -245,16 +274,16 @@ public class JDCityPicker {
     /**
      * 设置默认的省份数据
      */
-    private void setProvinceListData() {
-        provinceList = parseHelper.getProvinceBeanArrayList();
+    private void setupProvinceListData() {
+        if (dataSource == null) {
+            provinceList = parseHelper.getProvinceBeanArrayList();
+        }
         if (provinceList != null && !provinceList.isEmpty()) {
             mProvinceAdapter = new ProvinceAdapter(context, provinceList);
             mCityListView.setAdapter(mProvinceAdapter);
         } else {
-            ToastUtils.showLongToast(context, "解析本地城市数据失败！");
-            return;
+//            ToastUtils.showLongToast(context, "解析本地城市数据失败！");
         }
-
     }
 
     /**
@@ -268,7 +297,33 @@ public class JDCityPicker {
         if (parseHelper.getProvinceBeanArrayList().isEmpty()) {
             parseHelper.initData(context);
         }
+    }
 
+    public void init(Context context, CityParseHelper cityParseHelper) {
+        this.context = context;
+        parseHelper = cityParseHelper;
+
+        //解析初始数据
+        if (parseHelper.getProvinceBeanArrayList().isEmpty()) {
+            parseHelper.initData(context);
+        }
+    }
+
+    public void init(final Context context, final IDataSource dataSource) {
+        this.context = context;
+        this.dataSource = dataSource;
+
+        dataSource.execute(new Runnable() {
+            @Override
+            public void run() {
+                List<ProvinceBean> provinceList = dataSource.getProvinceList();
+
+                JDCityPicker.this.provinceList = provinceList;
+                if (mCityListView != null) {
+                    setupProvinceListData();
+                }
+            }
+        });
     }
 
 
@@ -379,7 +434,6 @@ public class JDCityPicker {
                     provinceList = (List<ProvinceBean>) msg.obj;
                     mProvinceAdapter.notifyDataSetChanged();
                     mCityListView.setAdapter(mProvinceAdapter);
-
                     break;
 
                 case INDEX_TAB_PROVINCE:
@@ -391,6 +445,7 @@ public class JDCityPicker {
 
                 case INDEX_TAB_CITY:
                     cityList = (List<CityBean>) msg.obj;
+                    mCityAdapter = new CityAdapter(context, cityList);
                     mCityAdapter.notifyDataSetChanged();
                     if (cityList != null && !cityList.isEmpty()) {
                         mCityListView.setAdapter(mCityAdapter);
@@ -400,6 +455,7 @@ public class JDCityPicker {
 
                 case INDEX_TAB_AREA:
                     areaList = (List<DistrictBean>) msg.obj;
+                    mAreaAdapter = new AreaAdapter(context, areaList);
                     mAreaAdapter.notifyDataSetChanged();
                     if (areaList != null && !areaList.isEmpty()) {
                         mCityListView.setAdapter(mAreaAdapter);
@@ -456,5 +512,12 @@ public class JDCityPicker {
 
     }
 
+    public interface IDataSource {
+        List<ProvinceBean> getProvinceList();
+        List<CityBean> getCityList(ProvinceBean provinceBean);
+        List<DistrictBean> getDistrictList(CityBean cityBean);
+
+        void execute(Runnable asyncTask);
+    }
 
 }
